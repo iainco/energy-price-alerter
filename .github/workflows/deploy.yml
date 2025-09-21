@@ -28,7 +28,7 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
-          APP_PATH: ${{ secrets.APP_PATH }} # e.g., /var/www/[APP_NAME]
+          APP_PATH: ${{ secrets.APP_PATH }} # e.g., /var/www/app_name
           BRANCH_NAME: ${{ github.ref_name }} # Get the branch name (e.g., 'main')
         run: |
           ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" << 'EOF'
@@ -70,7 +70,7 @@ jobs:
             ln -nfs "${APP_PATH}/.env" "${RELEASE_PATH}/.env"
 
             ## Symlink database.sqlite file
-            ln -nfs "${RELEASE_PATH}/database/database.sqlite" "${APP_PATH}/database.sqlite"
+            ln -nfs "${APP_PATH}/database.sqlite" "${RELEASE_PATH}/database/database.sqlite"
 
             ## Install Composer dependencies
             echo "Installing Composer dependencies..."
@@ -104,7 +104,7 @@ jobs:
 
             ## Clean up old releases (keep the last 5)
             echo "Cleaning up old releases..."
-            ls -dt "${APP_PATH}"/releases/* | tail -n +6 | xargs rm -rf -- {} || true
+            ls -dt "${APP_PATH}"/releases/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
             echo "Deployment complete!"
           EOF
 
