@@ -41,6 +41,9 @@ jobs:
             SHARED_DB="${APP_PATH}/database.sqlite"
             RELEASE_DB="${RELEASE_PATH}/database/database.sqlite"
 
+            echo "APP_PATH=${APP_PATH}"
+            echo "BRANCH_NAME=${BRANCH_NAME}"
+
             echo "--- Starting deployment to ${APP_PATH} ---"
 
             ## Create release directory
