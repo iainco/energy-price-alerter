@@ -7,18 +7,15 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production # Optional: Link to a GitHub Environment for better security/visibility
+    environment: production
 
     steps:
-      #- name: Checkout code
-      #  uses: actions/checkout@v4
-
       - name: Set up SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Add SSH host key (optional, but recommended)
+      - name: Add SSH host key
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
@@ -28,105 +25,81 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
-          APP_PATH: ${{ secrets.APP_PATH }} # e.g., /var/www/app_name
-          BRANCH_NAME: ${{ github.ref_name }} # Get the branch name (e.g., 'main')
+          APP_PATH: ${{ secrets.APP_PATH }}
+          BRANCH_NAME: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" <<EOF
-            # Define variables for the server-side script
-            APP_PATH="${APP_PATH}"
-            BRANCH_NAME="${BRANCH_NAME}"
-            RELEASE_NAME=$(date +"%Y%m%d%H%M%S")
-            RELEASE_PATH="${APP_PATH}/releases/${RELEASE_NAME}"
-            CURRENT_SYMLINK="${APP_PATH}/current"
-            SHARED_DB="${APP_PATH}/database.sqlite"
-            RELEASE_DB="${RELEASE_PATH}/database/database.sqlite"
+          set -euo pipefail
 
-            echo "APP_PATH=${APP_PATH}"
-            echo "BRANCH_NAME=${BRANCH_NAME}"
+          APP_PATH="${APP_PATH}"
+          BRANCH_NAME="${BRANCH_NAME}"
+          RELEASE_NAME=\$(date +"%Y%m%d%H%M%S")
+          RELEASE_PATH="\${APP_PATH}/releases/\${RELEASE_NAME}"
+          CURRENT_SYMLINK="\${APP_PATH}/current"
+          SHARED_DB="\${APP_PATH}/database.sqlite"
+          RELEASE_DB="\${RELEASE_PATH}/database/database.sqlite"
 
-            echo "--- Starting deployment to ${APP_PATH} ---"
+          echo "APP_PATH=\${APP_PATH}"
+          echo "BRANCH_NAME=\${BRANCH_NAME}"
+          echo "--- Starting deployment to \${APP_PATH} ---"
 
-            ## Create release directory
-            echo "Creating new release directory: ${RELEASE_PATH}"
-            mkdir -p "${RELEASE_PATH}" || { echo "Failed to create release directory"; exit 1; }
+          echo "Creating new release directory: \${RELEASE_PATH}"
+          mkdir -p "\${RELEASE_PATH}"
 
-            ## Clone the repository into the new release directory
-            echo "Cloning repository branch '${BRANCH_NAME}' into ${RELEASE_PATH}"
-            git clone --depth 1 --branch "${BRANCH_NAME}" "https://github.com/${GITHUB_REPOSITORY}.git" "${RELEASE_PATH}" || { echo "Failed to clone repository"; exit 1; }
+          echo "Cloning repository branch '\${BRANCH_NAME}' into \${RELEASE_PATH}"
+          git clone --depth 1 --branch "\${BRANCH_NAME}" "https://github.com/${GITHUB_REPOSITORY}.git" "\${RELEASE_PATH}"
 
-            ## Set permissions for writable dirs
-            echo "Setting permissions..."
-            sudo chown -R "www-data:www-data" "${RELEASE_PATH}/storage" "${RELEASE_PATH}/bootstrap/cache"
-            sudo chmod -R 775 "${RELEASE_PATH}/storage" "${RELEASE_PATH}/bootstrap/cache"
+          echo "Setting permissions..."
+          sudo chown -R www-data:www-data "\${RELEASE_PATH}/storage" "\${RELEASE_PATH}/bootstrap/cache"
+          sudo chmod -R 775 "\${RELEASE_PATH}/storage" "\${RELEASE_PATH}/bootstrap/cache"
 
-            ## Symlink .env 
-            ln -nfs "${APP_PATH}/.env" "${RELEASE_PATH}/.env"
+          ln -nfs "\${APP_PATH}/.env" "\${RELEASE_PATH}/.env"
 
-            ## Navigate into the new release directory
-            cd "${RELEASE_PATH}" || { echo "Failed to change directory to ${RELEASE_PATH}"; exit 1; }
+          cd "\${RELEASE_PATH}"
 
-            ## Install Composer dependencies
-            echo "Installing Composer dependencies..."
-            composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev || { echo "Composer install failed"; exit 1; }
+          echo "Installing Composer dependencies..."
+          composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
 
+          if [ -f "\$SHARED_DB" ]; then
+            echo "Shared SQLite DB found, ensuring release uses it."
+            rm -f "\$RELEASE_DB"
+          else
+            echo "No SQLite DB found, creating new empty DB..."
+            touch "\$SHARED_DB"
+          fi
 
-            ## Database
-            # Check if a shared DB already exists. This is the preferred state.
-            if [ -f "$SHARED_DB" ]; then
-                echo "Shared SQLite DB found, ensuring release uses it."
-                # Remove any existing release copy as it's not needed.
-                if [ -f "$RELEASE_DB" ]; then
-                    rm -f "$RELEASE_DB"
-                fi
-            # If no shared DB, check for a release DB to move to the shared location.
-            #elif [ -f "$RELEASE_DB" ]; then
-            #    echo "No shared SQLite DB found, moving release copy into shared location..."
-            #    mv "$RELEASE_DB" "$SHARED_DB"
-            # If neither DB exists, create a new empty one.
-            else
-                echo "No SQLite DB found, creating new empty DB..."
-                touch "$SHARED_DB"
+          echo "Symlinking shared SQLite DB into release..."
+          ln -nfs "\$SHARED_DB" "\$RELEASE_DB"
+
+          echo "Running database migrations..."
+          php artisan migrate --force
+
+          if [ -f "package.json" ]; then
+            echo "Installing Node.js dependencies and building assets..."
+            npm install --production
+
+            if [ -f "vite.config.js" ] || [ -f "vite.config.ts" ]; then
+              ./node_modules/.bin/vite build
             fi
+          else
+            echo "No package.json found, skipping Node.js steps."
+          fi
 
-            # Create the symlink from the shared DB to the release location.
-            # This step is common to all scenarios.
-            echo "Symlinking shared SQLite DB into release..."
-            ln -nfs "$SHARED_DB" "$RELEASE_DB"
+          echo "Optimizing Laravel application..."
+          php artisan optimize
 
-            echo "Running database migrations..."
-            php artisan migrate --force || { echo "Migrations failed"; exit 1; }
+          echo "Clearing caches..."
+          php artisan cache:clear
+          # php artisan queue:restart
+          # php artisan horizon:terminate
 
+          echo "Switching 'current' symlink to new release..."
+          ln -nfs "\${RELEASE_PATH}" "\${CURRENT_SYMLINK}.tmp"
+          mv -T "\${CURRENT_SYMLINK}.tmp" "\${CURRENT_SYMLINK}"
+          echo "Symlink switched to \${RELEASE_PATH}"
 
-            ## Install Node.js dependencies and build assets (if applicable)
-            if [ -f "${RELEASE_PATH}/package.json" ]; then
-                echo "Installing Node.js dependencies and building assets..."
-                npm install --production || { echo "NPM install failed"; exit 1; }
-
-                if [ -f "${RELEASE_PATH}/vite.config.js" ] || [ -f "${RELEASE_PATH}/vite.config.ts" ]; then
-                    ./node_modules/.bin/vite build || { echo "NPM build failed"; exit 1; }
-                fi
-            else
-                echo "No package.json found, skipping Node.js steps."
-            fi
-
-
-            ## Optimize Laravel
-            echo "Optimizing Laravel application..."
-            php artisan optimize || { echo "Laravel optimize failed"; exit 1; }
-
-            ## Clear caches
-            echo "Clearing caches..."
-            php artisan cache:clear
-            #php artisan queue:restart # Uncomment if you use queues
-            #php artisan horizon:terminate # or Horizon
-
-            ## Atomically update the 'current' symlink
-            echo "Switching 'current' symlink to new release..."
-            ln -nfs "${RELEASE_PATH}" "${CURRENT_SYMLINK}.tmp" && mv -T "${CURRENT_SYMLINK}.tmp" "${CURRENT_SYMLINK}" || { echo "Failed to switch symlink"; exit 1; }
-            echo "Symlink switched to ${RELEASE_PATH}"
-
-            ## Clean up old releases (keep last 5)
-            #echo "Cleaning up old releases..."
-            #ls -dt "${APP_PATH}"/releases/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
-            #echo "Deployment complete!"
+          # echo "Cleaning up old releases..."
+          # ls -dt "\${APP_PATH}"/releases/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+          # echo "Deployment complete!"
           EOF
