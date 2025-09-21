@@ -31,7 +31,7 @@ jobs:
           APP_PATH: ${{ secrets.APP_PATH }} # e.g., /var/www/app_name
           BRANCH_NAME: ${{ github.ref_name }} # Get the branch name (e.g., 'main')
         run: |
-          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" << 'EOF'
+          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" <<EOF
             # Define variables for the server-side script
             APP_PATH="${APP_PATH}"
             BRANCH_NAME="${BRANCH_NAME}"
