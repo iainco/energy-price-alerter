@@ -1,4 +1,4 @@
-name: Laravel Zero-Downtime Deployment
+name: Zero-Downtime Deployment
 
 on:
   release:
@@ -29,7 +29,7 @@ jobs:
           BRANCH_NAME: ${{ github.ref_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" <<EOF
+          ssh "${SSH_USER}@${SSH_HOST}" <<EOF
           set -euo pipefail
 
           APP_PATH="${APP_PATH}"
@@ -44,6 +44,7 @@ jobs:
           echo "BRANCH_NAME=\${BRANCH_NAME}"
           echo "--- Starting deployment to \${APP_PATH} ---"
 
+          ## Directories & Permissions
           echo "Creating new release directory: \${RELEASE_PATH}"
           mkdir -p "\${RELEASE_PATH}"
 
@@ -58,15 +59,21 @@ jobs:
 
           cd "\${RELEASE_PATH}"
 
+          ## Composer
           echo "Installing Composer dependencies..."
           composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
 
-          if [ -f "\$SHARED_DB" ]; then
-            echo "Shared SQLite DB found, ensuring release uses it."
-            rm -f "\$RELEASE_DB"
+          ## Database
+          # Check if a shared DB already exists. This is the preferred state.
+          if [ -f "$SHARED_DB" ]; then
+              echo "Shared SQLite DB found, ensuring release uses it."
+              # Remove any existing release copy as it's not needed.
+              if [ -f "$RELEASE_DB" ]; then
+                  rm -f "$RELEASE_DB"
+              fi
           else
-            echo "No SQLite DB found, creating new empty DB..."
-            touch "\$SHARED_DB"
+              echo "No SQLite DB found, creating new empty DB..."
+              touch "$SHARED_DB"
           fi
 
           echo "Symlinking shared SQLite DB into release..."
@@ -75,6 +82,7 @@ jobs:
           echo "Running database migrations..."
           php artisan migrate --force
 
+          ## NPM
           if [ -f "package.json" ]; then
             echo "Installing Node.js dependencies and building assets..."
             npm install --production
@@ -86,14 +94,18 @@ jobs:
             echo "No package.json found, skipping Node.js steps."
           fi
 
+          ## Optimise & Cache
           echo "Optimizing Laravel application..."
           php artisan optimize
 
           echo "Clearing caches..."
           php artisan cache:clear
+
+          # Queue (TODO: make this conditional depending on .env's QUEUE_CONNECTION?)
           # php artisan queue:restart
           # php artisan horizon:terminate
 
+          ## Switch current & Purge
           echo "Switching 'current' symlink to new release..."
           ln -nfs "\${RELEASE_PATH}" "\${CURRENT_SYMLINK}.tmp"
           mv -T "\${CURRENT_SYMLINK}.tmp" "\${CURRENT_SYMLINK}"
