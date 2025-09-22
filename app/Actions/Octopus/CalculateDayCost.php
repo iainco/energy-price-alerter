@@ -10,12 +10,16 @@ class CalculateDayCost
         // but we should fetch pricing data from the API periodically (or all the time 
         // if not on a fixed rate)
 
-        $total = 0.0;
+        $unitRate = config('octopus.standard_unit_rate');
+        $standing = config('octopus.standing_charge');
+
+        $dayTotal = 0.0;
 
         foreach ($consumptionResponse['results'] as $consumption) {
-            $total += $consumption['consumption'] * config('octopus.standard_unit_rate');
+            $halfHourCost = $consumption['consumption'] * $unitRate;
+            $dayTotal += round($halfHourCost, 2);
         }
-
-        return $total + config('octopus.standing_charge');
+        
+        return $dayTotal + $standing;
     }
 }
