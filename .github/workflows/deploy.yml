@@ -1,5 +1,4 @@
-name: Laravel Zero-Downtime Deployment
-
+name: Zero-Downtime Deployment
 on:
   release:
     types: [published]
@@ -7,104 +6,98 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production # Optional: Link to a GitHub Environment for better security/visibility
-
+    environment: production
     steps:
-      #- name: Checkout code
-      #  uses: actions/checkout@v4
-
-      - name: Set up SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Add SSH host key (optional, but recommended)
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
       - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          APP_PATH: ${{ secrets.APP_PATH }} # e.g., /var/www/[APP_NAME]
-          BRANCH_NAME: ${{ github.ref_name }} # Get the branch name (e.g., 'main')
-        run: |
-          ssh -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" << 'EOF'
-            # Define variables for the server-side script
-            APP_PATH="${APP_PATH}"
-            BRANCH_NAME="${BRANCH_NAME}"
+          APP_PATH: ${{ secrets.APP_PATH }}
+          BRANCH_NAME: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}        
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: APP_PATH,BRANCH_NAME,GITHUB_REPOSITORY
+          script: |
+            set -euo pipefail
+            
             RELEASE_NAME=$(date +"%Y%m%d%H%M%S")
             RELEASE_PATH="${APP_PATH}/releases/${RELEASE_NAME}"
             CURRENT_SYMLINK="${APP_PATH}/current"
-
-            echo "--- Starting deployment to ${APP_PATH} ---"
-
-            ## Create release directory
-            echo "Creating new release directory: ${RELEASE_PATH}"
-            mkdir -p "${RELEASE_PATH}" || { echo "Failed to create release directory"; exit 1; }
-
-            ## Clone the repository into the new release directory
-            #    Alternatively, you could rsync files from the GHA runner to the server
-            echo "Cloning repository branch '${BRANCH_NAME}' into ${RELEASE_PATH}"
-            git clone --depth 1 --branch "${BRANCH_NAME}" "https://github.com/${GITHUB_REPOSITORY}.git" "${RELEASE_PATH}" || { echo "Failed to clone repository"; exit 1; }
-
-            ## Navigate into the new release directory
-            cd "${RELEASE_PATH}" || { echo "Failed to change directory to ${RELEASE_PATH}"; exit 1; }
-
-            mkdir "${RELEASE_PATH}/storage"
-            mkdir -p "${RELEASE_PATH}/bootstrap/cache"
-
-            ##  Set file and directory permissions for Laravel
-            echo "Setting file and directory permissions..."
-            # Set ownership to the web server user (e.g., www-data) and the deployment user
-            # Adjust 'www-data' if your web server uses a different user/group (e.g., 'nginx' for Nginx on CentOS)
-            sudo chown -R "www-data:www-data" "${RELEASE_PATH}"
-
-            ## Set write permissions for storage and bootstrap/cache
-            sudo chmod -R 775 "${RELEASE_PATH}/storage"
-            sudo chmod -R 775 "${RELEASE_PATH}/bootstrap/cache"
-
-            ## Symlink .env file
-            ln -nfs "${APP_PATH}/.env" "${RELEASE_PATH}/.env"
-
-            ## Symlink database.sqlite file
-            ln -nfs "${RELEASE_PATH}/database/database.sqlite" "${APP_PATH}/database.sqlite"
-
-            ## Install Composer dependencies
+            SHARED_DB="${APP_PATH}/database.sqlite"
+            RELEASE_DB="${RELEASE_PATH}/database/database.sqlite"
+            
+            echo "APP_PATH=$APP_PATH"
+            echo "BRANCH_NAME=$BRANCH_NAME"
+            echo "GITHUB_REPOSITORY=$GITHUB_REPOSITORY"
+            echo "--- Starting deployment to $APP_PATH ---"
+            
+            ## Directories & Permissions
+            echo "Creating new release directory: $RELEASE_PATH"
+            mkdir -p "$RELEASE_PATH"
+            
+            echo "Cloning repository branch '$BRANCH_NAME' into $RELEASE_PATH"
+            git clone --depth 1 --branch "$BRANCH_NAME" "https://github.com/${GITHUB_REPOSITORY}.git" "$RELEASE_PATH"
+            
+            echo "Setting permissions..."
+            sudo chown -R www-data:www-data "$RELEASE_PATH/storage" "$RELEASE_PATH/bootstrap/cache"
+            sudo chmod -R 775 "$RELEASE_PATH/storage" "$RELEASE_PATH/bootstrap/cache"
+            
+            ln -nfs "$APP_PATH/.env" "$RELEASE_PATH/.env"
+            cd "$RELEASE_PATH"
+            
+            ## Composer
             echo "Installing Composer dependencies..."
-            composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev || { echo "Composer install failed"; exit 1; }
-
-            ## Run database migrations
-            #    IMPORTANT: Migrations MUST be backward-compatible for zero-downtime.
+            composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
+            
+            ## Database
+            # Check if a shared DB already exists. This is the preferred state.
+            if [ -f "$SHARED_DB" ]; then
+                echo "Shared SQLite DB found, ensuring release uses it."
+                # Remove any existing release copy as it's not needed.
+                if [ -f "$RELEASE_DB" ]; then
+                    rm -f "$RELEASE_DB"
+                fi
+            else
+                echo "No SQLite DB found, creating new empty DB..."
+                touch "$SHARED_DB"
+            fi
+            
+            echo "Symlinking shared SQLite DB into release..."
+            ln -nfs "$SHARED_DB" "$RELEASE_DB"
+            
             echo "Running database migrations..."
-            php artisan migrate --force || { echo "Migrations failed"; exit 1; }
-
-            ## Install Node.js dependencies and build assets (if applicable)
-            #    Uncomment if your Laravel app uses frontend assets
-            echo "Installing Node.js dependencies and building assets..."
-            npm install --production || { echo "NPM install failed"; exit 1; }
-            ./node_modules/.bin/vite run build || { echo "NPM build failed"; exit 1; }
-
-            ## Optimize Laravel
+            php artisan migrate --force
+            
+            ## NPM
+            if [ -f "package.json" ]; then
+              echo "Installing Node.js dependencies and building assets..."
+              npm install --production
+              if [ -f "vite.config.js" ] || [ -f "vite.config.ts" ]; then
+                ./node_modules/.bin/vite build
+              fi
+            else
+              echo "No package.json found, skipping Node.js steps."
+            fi
+            
+            ## Optimise & Cache
             echo "Optimizing Laravel application..."
-            php artisan optimize || { echo "Laravel optimize failed"; exit 1; }
-
-            ## Clear caches (important after deployment)
-            echo "Clearing application caches..."
+            php artisan optimize
+            
+            echo "Clearing caches..."
             php artisan cache:clear
-            #php artisan queue:restart # If you use Laravel queues
-
-            ## Atomically update the 'current' symlink
-            # This is the zero-downtime step.
+            
+            # Queue (TODO: make this conditional depending on .env's QUEUE_CONNECTION?)
+            # php artisan queue:restart
+            # php artisan horizon:terminate
+            
+            ## Switch current & Purge
             echo "Switching 'current' symlink to new release..."
-            ln -nfs "${RELEASE_PATH}" "${CURRENT_SYMLINK}.tmp" && mv -T "${CURRENT_SYMLINK}.tmp" "${CURRENT_SYMLINK}" || { echo "Failed to switch symlink"; exit 1; }
-            echo "Symlink switched to ${RELEASE_PATH}"
-
-            ## Clean up old releases (keep the last 5)
-            echo "Cleaning up old releases..."
-            ls -dt "${APP_PATH}"/releases/* | tail -n +6 | xargs rm -rf -- {} || true
+            ln -nfs "$RELEASE_PATH" "$CURRENT_SYMLINK.tmp"
+            mv -T "$CURRENT_SYMLINK.tmp" "$CURRENT_SYMLINK"
+            echo "Symlink switched to $RELEASE_PATH"
+            
+            # echo "Cleaning up old releases..."
+            # ls -dt "${APP_PATH}"/releases/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
             echo "Deployment complete!"
-          EOF
-
