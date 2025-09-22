@@ -25,7 +25,7 @@ return Application::configure(basePath: dirname(__DIR__))
         //
     })
     ->withSchedule(function (Schedule $schedule) {
-        $schedule->job(new CalculateDailyCost)->dailyAt('11:00');
+        $schedule->job(new CalculateDailyCost)->dailyAt('12:00');
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
