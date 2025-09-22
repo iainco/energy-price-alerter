@@ -29,35 +29,35 @@ jobs:
           BRANCH_NAME: ${{ github.ref_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          ssh "${SSH_USER}@${SSH_HOST}" <<EOF
+          ssh "${SSH_USER}@${SSH_HOST}" <<'EOF'
           set -euo pipefail
 
-          APP_PATH="${APP_PATH}"
-          BRANCH_NAME="${BRANCH_NAME}"
-          RELEASE_NAME=\$(date +"%Y%m%d%H%M%S")
-          RELEASE_PATH="\${APP_PATH}/releases/\${RELEASE_NAME}"
-          CURRENT_SYMLINK="\${APP_PATH}/current"
-          SHARED_DB="\${APP_PATH}/database.sqlite"
-          RELEASE_DB="\${RELEASE_PATH}/database/database.sqlite"
+          APP_PATH="$APP_PATH"
+          BRANCH_NAME="$BRANCH_NAME"
+          RELEASE_NAME=$(date +"%Y%m%d%H%M%S")
+          RELEASE_PATH="${APP_PATH}/releases/${RELEASE_NAME}"
+          CURRENT_SYMLINK="${APP_PATH}/current"
+          SHARED_DB="${APP_PATH}/database.sqlite"
+          RELEASE_DB="${RELEASE_PATH}/database/database.sqlite"
 
-          echo "APP_PATH=\${APP_PATH}"
-          echo "BRANCH_NAME=\${BRANCH_NAME}"
-          echo "--- Starting deployment to \${APP_PATH} ---"
+          echo "APP_PATH=$APP_PATH"
+          echo "BRANCH_NAME=$BRANCH_NAME"
+          echo "--- Starting deployment to $APP_PATH ---"
 
           ## Directories & Permissions
-          echo "Creating new release directory: \${RELEASE_PATH}"
-          mkdir -p "\${RELEASE_PATH}"
+          echo "Creating new release directory: $RELEASE_PATH"
+          mkdir -p "$RELEASE_PATH"
 
-          echo "Cloning repository branch '\${BRANCH_NAME}' into \${RELEASE_PATH}"
-          git clone --depth 1 --branch "\${BRANCH_NAME}" "https://github.com/${GITHUB_REPOSITORY}.git" "\${RELEASE_PATH}"
+          echo "Cloning repository branch '$BRANCH_NAME' into $RELEASE_PATH"
+          git clone --depth 1 --branch "$BRANCH_NAME" "https://github.com/${GITHUB_REPOSITORY}.git" "$RELEASE_PATH"
 
           echo "Setting permissions..."
-          sudo chown -R www-data:www-data "\${RELEASE_PATH}/storage" "\${RELEASE_PATH}/bootstrap/cache"
-          sudo chmod -R 775 "\${RELEASE_PATH}/storage" "\${RELEASE_PATH}/bootstrap/cache"
+          sudo chown -R www-data:www-data "$RELEASE_PATH/storage" "$RELEASE_PATH/bootstrap/cache"
+          sudo chmod -R 775 "$RELEASE_PATH/storage" "$RELEASE_PATH/bootstrap/cache"
 
-          ln -nfs "\${APP_PATH}/.env" "\${RELEASE_PATH}/.env"
+          ln -nfs "$APP_PATH/.env" "$RELEASE_PATH/.env"
 
-          cd "\${RELEASE_PATH}"
+          cd "$RELEASE_PATH"
 
           ## Composer
           echo "Installing Composer dependencies..."
@@ -77,7 +77,7 @@ jobs:
           fi
 
           echo "Symlinking shared SQLite DB into release..."
-          ln -nfs "\$SHARED_DB" "\$RELEASE_DB"
+          ln -nfs "$SHARED_DB" "$RELEASE_DB"
 
           echo "Running database migrations..."
           php artisan migrate --force
@@ -107,11 +107,11 @@ jobs:
 
           ## Switch current & Purge
           echo "Switching 'current' symlink to new release..."
-          ln -nfs "\${RELEASE_PATH}" "\${CURRENT_SYMLINK}.tmp"
-          mv -T "\${CURRENT_SYMLINK}.tmp" "\${CURRENT_SYMLINK}"
-          echo "Symlink switched to \${RELEASE_PATH}"
+          ln -nfs "$RELEASE_PATH" "$CURRENT_SYMLINK.tmp"
+          mv -T "$CURRENT_SYMLINK.tmp" "$CURRENT_SYMLINK"
+          echo "Symlink switched to $RELEASE_PATH"
 
           # echo "Cleaning up old releases..."
-          # ls -dt "\${APP_PATH}"/releases/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+          # ls -dt "${APP_PATH}"/releases/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
           # echo "Deployment complete!"
-          EOF
+      EOF
