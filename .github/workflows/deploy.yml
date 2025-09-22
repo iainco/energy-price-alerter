@@ -114,4 +114,4 @@ jobs:
           # echo "Cleaning up old releases..."
           # ls -dt "${APP_PATH}"/releases/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
           # echo "Deployment complete!"
-      EOF
+          EOF
