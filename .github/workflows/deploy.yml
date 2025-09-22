@@ -29,10 +29,10 @@ jobs:
           BRANCH_NAME: ${{ github.ref_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          # The fix is here: passing variables to the remote shell
-          ssh "${SSH_USER}@${SSH_HOST}" "bash -s" <<'EOF'
+          ssh "${SSH_USER}@${SSH_HOST}" <<'EOF'
           set -euo pipefail
-
+          
+          # Pass the variables from the local environment into the remote shell
           APP_PATH="${APP_PATH}"
           BRANCH_NAME="${BRANCH_NAME}"
           GITHUB_REPOSITORY="${GITHUB_REPOSITORY}"
